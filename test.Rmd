@@ -1,0 +1,933 @@
+---
+title: "HSCT Analysis"
+author: "Matt Kmiecik"
+date: "Last update: `r format(Sys.Date(), format = '%d %B %Y')`"
+output: 
+  html_document:
+    highlight: zenburn
+    theme: journal
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=F}
+# rmarkdown settings
+knitr::opts_chunk$set(echo = T, 
+                      warning = F, 
+                      message = F, 
+                      include = T, 
+                      cache = F, 
+                      fig.align = 'center',
+                      comment = NA
+                      )
+options(knitr.table.format = 'html') # For the html tables
+```
+
+## Packages
+
+```{r packages}
+pkgs <- c(
+  "knitr", "kableExtra", "Hmisc", "tidyverse", 
+  "LSAfun", "broom", "ngram", "RColorBrewer"
+  )
+xfun::pkg_attach(pkgs)
+```
+
+## Custom Functions
+
+```{r}
+# Function that simplifies the printing of tables
+matt_kable <- function(x){
+  
+  kable(x) %>%
+    kable_styling(bootstrap_options = c('striped', 'hover', 'responsive'))
+  
+}
+```
+
+## Plotting Tools
+
+```{r}
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+
+pu_pal <- brewer.pal(9, "Purples") # display.brewer.pal(9, "Purples")
+```
+
+## Prepro Scripts
+
+This chunk runs the pre-processing scripts:
+
+```{r}
+source("dod-prepro.R")
+# the above prepro script creates the following:
+# load("dod-pre-data.RData")          # From DOD study
+# load("dod-hayling-tbi-trim.RData")  # From DOD study
+# load("dod-hayling-ctl-trim.RData")  # From DOD study
+
+source("control-prepro.R")
+# the above prepro script creates the following:
+# load("control-hsct-data.RData")   # From HSCT Control study
+# load("control-iq-data.RData")     # From HSCT Control study
+# load("control-demo-data.RData")   # From HSCT Control study
+
+source("lsa-prepro.R")
+# The above prepro script creates the following:
+# load("lsa-data.RData")
+```
+
+## Data
+
+This chunk will load various data frames prepared from preprocessing scripts.
+
+```{r dataload}
+# Neuropsych data ----
+# These data were created by running: source("dod-prepro.R")
+load("dod-pre-data.RData")            # From DOD study
+
+# From source("control-prepro.R")
+load("control-hsct-data.RData")       # From HSCT Control study
+
+# These data were created by running: source("control-prepro.R")
+load("control-iq-data.RData")         # From HSCT Control study
+
+# Demographic data ----
+load("control-demo-data.RData")       # From HSCT Control study
+
+# LSA, WF, and CD measures ----
+load("lsa-data.RData")
+load("wf-data.RData")
+```
+
+## Step 1
+
+Seeing if groups are balanced:
+
+```{r}
+# DOD
+# This pipeline prepares the DOD neuropsych data to match the HSCT control study
+dod_neuropsych <- dod_pre %>%
+  select(DODID = dodID, 
+         group = participantType, 
+         yrEd, 
+         sex, 
+         age, 
+         audit, 
+         bdi,
+         sc.time.raw = sec1RawScore,
+         sc.time.scaled = sec1SS,
+         uc.time.raw = sec2RawScore,
+         uc.time.scaled = sec2SS,
+         cat.a.errors = catAErrors,
+         a.score = aScore,
+         cat.b.errors = catBErrors,
+         b.score = bScore,
+         ab.score = abScore,
+         errors.scaled = sec2ErrorsSS,
+         total.scaled = abcSS,
+         hsct.scaled = overallSS,
+         wasi.vocab.rscore = vocabRawScore,
+         wasi.vocab.tscore = vocabTScore,
+         wasi.similarities.rscore = similaritiesRawScore,
+         wasi.similarities.tscore = similaritiesTScore,
+         wasi.matrix.rscore = matrixRawScore,
+         wasi.matrix.tscore = matrixTScore,
+         # wasi.viq = ,    Not available in DOD data, but is possible to obtain
+         wasi.full2IQ = wasiIQ,
+         wtar.rscore = wtarRawScore,
+         wtar.sscore = wtarSS
+         ) %>%
+  rowwise() %>%
+  mutate(wasi.tverbal = sum(wasi.vocab.tscore, wasi.similarities.tscore),
+         wasi.full2subtest = sum(wasi.vocab.tscore, wasi.matrix.tscore),
+         audit = as.numeric(audit)
+         ) %>%
+  ungroup() %>%
+  filter(complete.cases(hsct.scaled)) %>% # removes ss if they don't have HSCT
+  # removes if they don't have HSCT words
+  filter(DODID %in% unique(lsa_data$DODID)) %>%
+  # The following participants need to be removed bc of the following:
+  #   DOD-0276 : brain tumor
+  #   DOD-0381 : has Erb's Palsy and embolisms due to diving accident
+  #   DOD-1114 : has bipolar and depression
+  #   DOD-5359 : did not have a TBI, but had LOC due to lack of oxygen
+  filter(DODID %nin% c("DOD-0276", "DOD-0381", "DOD-1114", "DOD-5359"))
+
+# HSCT controls
+# This pipeline prepares the HSCT control data to match the DOD neuropsych data
+hsct_neuropsych <- control_iq_data %>% 
+  inner_join(
+    ., 
+    control_demo_data %>% mutate(ssID = as.numeric(ID)), 
+    by = "ssID"
+    ) %>%
+  inner_join(., control_hsct_data, by = "ssID") %>%
+  select(DODID = ssID,
+         starts_with("wasi"),
+         sex = Sex,
+         age = Age,
+         yrEd = Edu,
+         audit = AUDIT_SCORE,
+         bdi = BDI_SCORE,
+         sc.time.raw:hsct.scaled,
+         starts_with("wasi"),
+         starts_with("wtar")
+         ) %>%
+  filter(complete.cases(hsct.scaled)) %>%
+  filter(DODID != 3231 | DODID != 5481 | DODID != 1370) %>% # DROP THESE SS
+  mutate(
+    group = "Control", 
+    DODID = as.character(DODID), 
+    yrEd = as.numeric(yrEd),
+    age = as.numeric(age),
+    bdi = as.numeric(bdi),
+    audit = as.numeric(audit)
+    ) 
+
+# Combines all demo and neuropsych into one df
+demo_neuropsych <- bind_rows(hsct_neuropsych, dod_neuropsych)
+```
+
+Now, let's drop participants that have AUDIT scores > 10, as Kmiecik et al. (2018) did this, and summaize all measures separated by group.
+
+A couple of important NAs will emerge:
+
+* DOD-1879 has no BDI
+* DOD-3484 was only administered 1/2 of the BDI form
+
+The rest of the NAs that did emerge: we went through the paper copies and updated the "dod-neuropsych-data.xlsx" sheet = "mattDatabase_addedHSCT_SS"
+
+Also, we are taking a look at if we were to look at the groups separated by OSU worst injury score:
+
+1 = "improbable TBI"
+2 = "possible TBI"
+3 = "mild TBI"
+4 = "moderately severe TBI"
+5 = "more severe TBI"
+
+We split this into 3 comparisons:
+
+* Control vs TBI (all severities)
+* Possible TBI vs. Mild + Moderate/Severe TBI
+* Mild vs. Moderate/Severe TBI
+
+
+```{r}
+# Let's first gather the TBI injury information
+osu <- dod_pre %>% select(DODID = dodID, osuWorstInjury)
+
+# Cleaning up the big df with various measures
+demo_neuropsych_clean <- demo_neuropsych %>% 
+  filter(audit <= 10) %>% # drops ss with elevated audit scores
+  left_join(., osu, by = "DODID") %>% # inserts OSU Scores
+  mutate(
+    osuWorstInjury = case_when(
+      is.na(osuWorstInjury) ~ "Control",
+      osuWorstInjury == 2 ~ "Possible",
+      osuWorstInjury == 3 ~ "Mild",
+      osuWorstInjury == 4 ~ "Mod/Severe",
+      osuWorstInjury == 5 ~ "Mod/Severe"
+      ),
+    osuWorstInjury = factor(osuWorstInjury) # converts to factor
+  )
+
+# Specifies contrasts
+# This helps with the linear modeling
+contrasts(demo_neuropsych_clean$osuWorstInjury) <-
+  cbind(
+    CvTBI = c(+3, -1, -1, -1),
+    PvMMS = c(0, -1, -1, +2),
+    MvMS  = c(0, +1, -1, 0)
+    )
+
+# Long format
+demo_neuropsych_long <- demo_neuropsych_clean %>%
+  select(-group) %>% # don't need this anymore
+  gather(meas, value, -DODID, -osuWorstInjury)
+
+# Summarizes demographic and HSCT standard data
+demo_clean_desc <- demo_neuropsych_long %>%
+  filter(meas %nin% "sex") %>%
+  mutate(value = as.numeric(value)) %>%
+  group_by(osuWorstInjury, meas) %>%
+  summarise(
+    n = n(),
+    n.na = sum(is.na(value)),
+    m = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE)
+    ) %>%
+  ungroup()
+# Saves out these results
+write_csv(demo_clean_desc, path = "res-demo-neuropsych-descriptives.csv")
+matt_kable(demo_clean_desc %>% arrange(meas)) # Prints these to table
+
+# Looking a those with NAs
+# yo <- demo_neuropsych_clean %>% filter(is.na(value))
+# Notes about the NAs:
+# - None of the control DOD participants were administered the WTAR
+# - The DOD database does not store the verbal IQ, just the t-scores
+
+# TBI measures
+dod_pre %>%
+  filter(dodID %in% unique(demo_neuropsych_clean$DODID)) %>%
+  select(dodID, osuWorstInjury) %>%
+  count(osuWorstInjury) # The NA's are from DOD controls
+
+# Runs linear model on whole data set
+demo_neuropsych_lm <- demo_neuropsych_long %>%
+  # filters out non numeric vars and vars with all NAs
+  filter(meas %nin% c("sex", "wasi.viq", "wtar.rscore", "wtar.sscore")) %>% 
+  group_by(meas) %>%
+  do(mod = lm(value ~ 1 + osuWorstInjury, data = .))
+
+# Tidying the lms to plot
+demo_neuropsych_tidy <- demo_neuropsych_lm %>% 
+  tidy(mod) %>%
+  mutate(sig = ifelse(p.value < .05, "True", "False")) %>%
+  ungroup()
+
+# plotting the lms to see what is different between the groups
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryCvTBI"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryCvTBI") +
+  theme_minimal()
+
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryPvMMS"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryPvMMS") +
+  theme_minimal()
+
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryMvMS"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryMvMS") +
+  theme_minimal()
+
+# Table of participants included in analyses
+# matt_kable(
+#   demo_neuropsych_clean %>% filter(meas == "age") %>% select(DODID, group)
+#   )
+```
+
+## LSA
+
+```{r lsa}
+lsa_data_sum <- lsa_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(DODID, section) %>%
+  summarize(lsa.m = mean(lsa, na.rm = TRUE), sd = sd(lsa, na.rm = TRUE), n = n()) %>%
+  ungroup()
+  
+lsa_sum_iq <- lsa_data_sum %>%
+  group_by(DODID) %>%
+  summarise(lsa_diff = -diff(lsa.m)) %>%
+  inner_join(
+    ., 
+    demo_neuropsych_clean, 
+    by = "DODID"
+    ) %>%
+  mutate(group = NULL) %>%
+  ungroup()
+  #select(DODID, osuWorstInjury, age, lsa_diff, wasi.vocab.tscore, wasi.similarities.tscore, wasi.matrix.tscore, wasi.full2IQ)
+lsa_mod <- lm(lsa_diff ~ 1 + osuWorstInjury, data = lsa_sum_iq)
+lsa_mod <- lm(lsa_diff ~ 1 + age + wasi.full2IQ + osuWorstInjury, data = lsa_sum_iq)
+lsa_mod <- lm(lsa_diff ~ 1 + age + wasi.vocab.tscore + wasi.similarities.tscore +wasi.matrix.tscore + osuWorstInjury, data = lsa_sum_iq)
+
+lsa_mod <- lm(lsa_diff ~ 1 + age + wasi.matrix.tscore + wasi.vocab.tscore + osuWorstInjury, data = lsa_sum_iq)
+
+# SUBJECT-WISE summary
+lsa_data_ss <- lsa_data %>%
+  group_by(DODID, group, section) %>%
+  summarise(n = n(), n.na = sum(is.na(lsa)), mLSA = mean(lsa, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(., osu_simple, by = "DODID") %>%
+  mutate(osuWIS = ifelse(group == "Control" & is.na(osuWorstInjury),
+                         "Control",
+                         osuWorstInjury),
+         osuGroups = case_when(
+           osuWIS == "Control" ~ "Control",
+           osuWIS == "2" ~ "Mild",
+           osuWIS == "3" ~ "Mild",
+           osuWIS == "4" ~ "Mod/Severe",
+           osuWIS == "5" ~ "Mod/Severe"
+           )
+         ) %>%
+  mutate(osuWIS = fct_relevel(osuWIS, c("Control", "2", "3", "4", "5")),
+         osuGroups = fct_relevel(osuGroups, c("Control", "Mild", "Mod/Severe"))
+         )
+
+# GROUP-WISE summary
+lsa_data_sum <- lsa_data_ss %>% 
+  group_by(group, section) %>%
+  summarise(N = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(N)) %>%
+  ungroup()
+
+lsa_osu_sum <- lsa_data_ss %>%
+  group_by(osuWIS, section) %>%
+  summarise(N = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(N)) %>%
+  ungroup()
+
+lsa_groups_sum <- lsa_data_ss %>%
+  group_by(osuGroups, section) %>%
+  summarise(N = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(N)) %>%
+  ungroup()
+  
+# Plot using OSU scores
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+ggplot(lsa_osu_sum, aes(section, m, group = osuWIS, color = osuWIS)) +
+  geom_point(data = lsa_data_ss, aes(y = mLSA), 
+             shape = 1, alpha = 2/3, position = pj, size = 2
+             ) +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), 
+                width = .05, position = pd
+                ) +
+  geom_path(position = pd) +
+  scale_color_brewer(palette = "Set1") +
+  coord_cartesian(ylim = c(.4, .6)) +
+  theme_minimal()
+
+
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+ggplot(lsa_groups_sum, aes(section, m, group = osuGroups, color = osuGroups)) +
+  geom_point(data = lsa_data_ss, aes(y = mLSA), 
+             shape = 1, alpha = 2/3, position = pj, size = 2
+             ) +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), 
+                width = .05, position = pd
+                ) +
+  geom_path(position = pd) +
+  scale_color_brewer(palette = "Set1") +
+  #coord_cartesian(ylim = c(.4, .6)) +
+  theme_minimal()
+
+
+# THE plot
+# Means + scatter
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+ggplot(lsa_data_sum, aes(section, m, group = group, color = group)) +
+  geom_point(data = lsa_data_ss, aes(y = mLSA), 
+             shape = 1, alpha = 2/3, position = pj, size = 2
+             ) +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), 
+                width = .05, position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean LSA Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Dark2") +
+  theme_minimal() +
+  theme(text = element_text(size = 15))
+
+# Means
+ggplot(lsa_data_sum, aes(section, m, group = group, color = group)) +
+  # geom_point(data = lsa_data_ss, aes(y = mLSA), 
+  #            shape = 1, alpha = 2/3, position = pj, size = 2
+  #            ) +
+  geom_point(position = pd, size = 2) +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), 
+                width = .05, position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean LSA Estimate", caption = "SEM error bars") +
+  coord_cartesian(ylim = c(.3, .6)) +
+  scale_color_brewer(palette = "Dark2") +
+  theme_minimal() +
+  theme(text = element_text(size = 15))
+
+# ggsave(filename = "lsa-plot-means.svg", width = 5, height = 4, units = "in", path = "viz/")
+# ggsave(filename = "lsa-plot-means.png", width = 5, height = 4, units = "in", path = "viz/")
+
+# Scatter
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+ggplot(lsa_data_sum, aes(section, m, group = group, color = group)) +
+  geom_point(data = lsa_data_ss, aes(y = mLSA),
+             shape = 1, alpha = 2/3, position = pj, size = 2
+             ) +
+  # geom_point(position = pd, size = 2) +
+  # geom_errorbar(aes(ymin = m-sem, ymax = m+sem), 
+  #               width = .05, position = pd
+  #               ) +
+  # geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean LSA Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Dark2") +
+  coord_cartesian(ylim = c(.3, .6)) +
+  theme_minimal() +
+  theme(text = element_text(size = 15))
+
+# ggsave(filename = "lsa-plot-scatter.svg", width = 5, height = 4, units = "in", path = "viz/")
+# ggsave(filename = "lsa-plot-scatter.png", width = 5, height = 4, units = "in", path = "viz/")
+
+# # Stats
+# ezANOVA(data = lsa_data_ss,
+#         dv = mLSA,
+#         wid = DODID,
+#         within = section,
+#         between = group,
+#         detailed = T)
+# 
+# ezANOVA(data = lsa_data_ss,
+#         dv = mLSA,
+#         wid = DODID,
+#         within = section,
+#         between = osuGroups,
+#         detailed = T)
+```
+
+### Modeling LSA
+
+Modeling the LSA values with the Model Comparison Approach.
+
+Orthogonal contrast codes will be defined as such:
+
+* Controls
+* Possible TBIs = OSU Worst Injury Score == 2
+* Mild TBIs = OSU Worst Injury Score == 3
+* Moderate-Severe TBI = OSU Worst Injury Score == 4 or 5
+
+```{r}
+ccodes <- tibble(osuWIS = c("Control", "2", "3", "4/5"),
+                 c1 = c(3, -1, -1, -1), # Control vs. TBI
+                 c2 = c(0, 2, -1, -1),   # Possible vs. Mild/Mod/Sever
+                 c3 = c(0, 0, 1, -1)    # Mild vs. Mod/Severe
+                 )
+
+matt_kable(ccodes)
+
+# Makes it easier to join with long data frame
+ccodes_merge <- tibble(osuWIS = c("Control", "2", "3", "4", "5"),
+                       c1 = c(3, -1, -1, -1, -1), # Control vs. TBI
+                       c2 = c(0, 2, -1, -1, -1),   # Possible vs. Mild/Mod/Sever
+                       c3 = c(0, 0, 1, -1, -1)    # Mild vs. Mod/Severe
+                       )
+
+# # Introduces contrast codes to the df
+# lsa_mod_data <- lsa_data_ss %>% 
+#   mutate(secc = ifelse(section == "SC", 1, -1)) %>% # dependency
+#   group_by(DODID, osuWIS) %>%
+#   # introduces dependency of HSCT section
+#   summarise(w0 = mean(mLSA),
+#             w1 = sum(mLSA*secc)
+#             ) %>%
+#   ungroup() %>%
+#   left_join(., ccodes_merge, by = "osuWIS") # between-subjects ccodes
+# 
+# # Models these data (see page 286 in MCA book)
+# lsa_mod <- lsa_mod_data %>%
+#   do(mod_w0 = lm(w0 ~ 1 + c1 + c2 + c3, data = .), 
+#      mod_w1 = lm(w1 ~ 1 + c1 + c2 + c3, data = .)
+#      )
+# 
+# # Prints their results to screen
+# summary(lsa_mod$mod_w0[[1]]) # Between-subjects 
+# summary(lsa_mod$mod_w1[[1]]) # HSCT section
+# 
+# # Plots
+# lsa_mod_data_2 <- lsa_data_ss %>% left_join(., ccodes_merge, by = "osuWIS")
+# 
+# c1_sum <- lsa_mod_data_2 %>% 
+#   group_by(section, c1) %>% 
+#   summarise(n = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(n))
+# 
+# c2_sum <- lsa_mod_data_2 %>% 
+#   group_by(section, c2) %>% 
+#   summarise(n = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(n)) %>%
+#   filter(c2 != 0)
+# 
+# c3_sum <- lsa_mod_data_2 %>% 
+#   group_by(section, c3) %>% 
+#   summarise(n = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(n)) %>%
+#   filter(c3 != 0)
+# 
+# ggplot(c1_sum, aes(section, m, group = factor(c1), color = factor(c1))) +
+#   geom_point(data = lsa_mod_data_2, 
+#              aes(x = section, mLSA), 
+#              shape = 1, 
+#              position = pj
+#              ) +
+#   geom_point(position = pd) +
+#   geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05, position = pd) +
+#   geom_line(position = pd) +
+#   scale_color_manual(values = c(pu_pal[6], pu_pal[9]), labels = c("TBI", "Controls")) +
+#   theme_minimal()
+# 
+# ggplot(c2_sum, aes(section, m, group = factor(c2), color = factor(c2))) +
+#   geom_point(data = lsa_mod_data_2 %>% filter(c2 != 0), 
+#              aes(x = section, mLSA), 
+#              shape = 1, 
+#              position = pj
+#              ) +
+#   geom_point(position = pd) +
+#   geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05, position = pd) +
+#   geom_line(position = pd) +
+#   scale_color_manual(values = c(pu_pal[7], pu_pal[9]), 
+#                      labels = c("Possible", "Mild/Mod/Severe")
+#                      ) +
+#   theme_minimal()
+# 
+# ggplot(c3_sum, aes(section, m, group = factor(c3), color = factor(c3))) +
+#   geom_point(data = lsa_mod_data_2 %>% filter(c3 != 0), 
+#              aes(x = section, mLSA), 
+#              shape = 1, 
+#              position = pj
+#              ) +
+#   geom_point(position = pd) +
+#   geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05, position = pd) +
+#   geom_line(position = pd) +
+#   scale_color_manual(values = c(pu_pal[8], pu_pal[9]), 
+#                      labels = c("Mild", "Mod/Severe")
+#                      ) +
+#   theme_minimal()
+```
+
+### LSA with age
+
+```{r}
+# Ages and IQ measures
+ages <- demo_neuropsych %>% select(DODID, age, wasi.full2IQ)
+
+lsa_mod_data_age <- lsa_data_ss %>% 
+  mutate(secc = ifelse(section == "SC", 1, -1)) %>% # dependency
+  group_by(DODID, osuWIS) %>%
+  # introduces dependency of HSCT section
+  summarise(w0 = mean(mLSA), # between-ss effect
+            w1 = sum(mLSA*secc) # within-ss effect of HSCT section 
+            ) %>%
+  ungroup() %>%
+  left_join(., ccodes_merge, by = "osuWIS") %>% # between-subjects ccodes
+  left_join(., ages, by = "DODID") %>%
+  mutate(age_c = scale(age, center = TRUE, scale = FALSE), # mean centers age
+         iq_c = scale(wasi.full2IQ, center = TRUE, scale = FALSE),
+         # converts to factor
+         osuWIS = factor(osuWIS, 
+                         levels = c("Control", "2", "3", "4", "5"),
+                         labels = c("Control","Possible", "Mild", "Mod/Severe", "Mod/Severe") 
+                        )
+         )
+
+# Contrasts ---
+ccodes_mat <- as.matrix(ccodes[,-1]) # reduces contrasts to matrix
+
+# imports these contrasts to factor
+contrasts(lsa_mod_data_age$osuWIS) <- ccodes_mat
+
+# Models ----
+summary(lm(w0 ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = lsa_mod_data_age))
+summary(lm(w1 ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = lsa_mod_data_age))
+
+# Visualizing significant results ----
+
+# W0 - IQ
+ggplot(lsa_mod_data_age, aes(wasi.full2IQ, w0)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "WASI Full 2 IQ", y = "Average LSA Rating (w0)") +
+  theme_minimal()
+
+# W1 - c1
+w1_sum <- lsa_mod_data_age %>% 
+  group_by(c1) %>%
+  summarise(m = mean(w1), sd = sd(w1), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+  
+ggplot(w1_sum, 
+       aes(factor(c1), m, group = factor(c1), color = factor(c1))
+       ) +
+  geom_point(data = lsa_mod_data_age, aes(y = w1), 
+             shape = 1, 
+             position = pj,
+             alpha = 1/3
+             ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .1) +
+  labs(x = "Group", 
+       y = "Within-ss LSA effect (w1)", 
+       title = "LSA Model Trending Effect"
+       ) +
+  scale_x_discrete(labels = c("-1" = "TBI", "3" = "Controls")) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# W1 IQ
+ggplot(lsa_mod_data_age, aes(wasi.full2IQ, w1)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "WASI Full 2 IQ", y = "Within-ss LSA effect (w1)") +
+  theme_minimal()
+
+# ggplot(lsa_mod_data_age, aes(age_c, w0, group = osuWIS, color = osuWIS)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = FALSE) +
+#   labs(x = "Age (centered)", y = "Average LSA Rating (w0)") +
+#   theme_minimal()
+# 
+# ggplot(lsa_mod_data_age, aes(age_c, w0)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = TRUE) +
+#   labs(x = "Age (centered)", y = "Average LSA Rating (w0)") +
+#   theme_minimal()
+# 
+# ggplot(lsa_mod_data_age, aes(age_c, w1, group = osuWIS, color = osuWIS)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = FALSE) +
+#   labs(x = "Age (centered", y = "Within-ss LSA effect (w1)") +
+#   theme_minimal()
+
+# ggplot(lsa_mod_data_age, aes(iq_c, w0, group = osuWIS, color = osuWIS)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = FALSE) +
+#   labs(x = "WASI Full 2 IQ (centered", y = "Average LSA Rating (w0)") +
+#   theme_minimal()
+# 
+# ggplot(lsa_mod_data_age, aes(iq_c, w1, group = osuWIS, color = osuWIS)) +
+#   geom_point() +
+#   geom_smooth(method = "lm", se = FALSE) +
+#   labs(x = "WASI Full 2 IQ (centered", y = "Within-ss LSA effect (w1)") +
+#   theme_minimal()
+```
+
+
+## Word Frequency
+
+```{r}
+
+
+
+
+# plot
+pd <- position_dodge(width = .1)
+ggplot(wf_data_sum, aes(section, wf, group = group, color = group)) +
+  geom_point(data = wf_data_ss, aes(y = m_wf), 
+             shape = 1, alpha = 2/3, position = "jitter"
+             ) +
+  geom_point(position = pd) +
+  geom_errorbar(aes(ymin = wf-sem_wf, ymax = wf+sem_wf), 
+                width = .05, 
+                position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean WF Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Dark2") +
+  theme_minimal()
+
+pd <- position_dodge(width = .1)
+ggplot(wf_osu_sum, aes(section, wf, group = osuWIS, color = osuWIS)) +
+  geom_point(data = wf_data_ss, aes(y = m_wf), 
+             shape = 1, alpha = 2/3, position = "jitter"
+             ) +
+  geom_point(position = pd) +
+  geom_errorbar(aes(ymin = wf-sem_wf, ymax = wf+sem_wf), 
+                width = .05, 
+                position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean WF Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()
+
+# ggsave(filename = "wf-plot.svg", width = 5, height = 4, units = "in", path = "viz/")
+# ggsave(filename = "wf-plot.png", width = 5, height = 4, units = "in", path = "viz/")
+
+
+ezANOVA(data = wf_data_ss,
+        dv = m_wf,
+        wid = DODID,
+        within = section,
+        between = group,
+        detailed = T
+        )
+
+pd <- position_dodge(width = .1)
+ggplot(wf_data_sum, aes(section, cd, group = group, color = group)) +
+  geom_point(data = wf_data_ss, aes(y = m_cd), 
+             shape = 1, alpha = 2/3, position = "jitter"
+             ) +
+  geom_point(position = pd) +
+  geom_errorbar(aes(ymin = cd-sem_cd, ymax = cd+sem_cd), 
+                width = .05, 
+                position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean SV Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Dark2") +
+  theme_minimal()
+
+pd <- position_dodge(width = .1)
+ggplot(wf_osu_sum, aes(section, cd, group = osuWIS, color = osuWIS)) +
+  geom_point(data = wf_data_ss, aes(y = m_cd), 
+             shape = 1, alpha = 2/3, position = "jitter"
+             ) +
+  geom_point(position = pd) +
+  geom_errorbar(aes(ymin = cd-sem_cd, ymax = cd+sem_cd), 
+                width = .05, 
+                position = pd
+                ) +
+  geom_line(position = pd, alpha = 2/3) +
+  labs(x = "Hayling Section", y = "Mean SV Estimate", caption = "SEM error bars") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()
+
+# ggsave(filename = "sv-plot.svg", width = 5, height = 4, units = "in", path = "viz/")
+# ggsave(filename = "sv-plot.png", width = 5, height = 4, units = "in", path = "viz/")
+
+ezANOVA(data = wf_data_ss,
+        dv = m_cd,
+        wid = DODID,
+        within = section,
+        between = group,
+        detailed = T
+        )
+
+ezANOVA(data = wf_data_ss,
+        dv = m_cd,
+        wid = DODID,
+        within = section,
+        between = osuGroups,
+        detailed = T
+        )
+```
+
+## Modeling WF with MCA
+
+```{r}
+wf_mod_data <- wf_data_ss %>% 
+  mutate(secc = ifelse(section == "SC", 1, -1)) %>% # dependency
+  group_by(DODID, osuWIS) %>%
+  # introduces dependency of HSCT section
+  summarise(w0_wf = mean(m_wf),     # between-ss effect
+            w1_wf = sum(m_wf*secc), # within-ss effect of HSCT section 
+            w0_cd = mean(m_cd),     # between-ss effect
+            w1_cd = sum(m_cd*secc)  # within-ss effect of HSCT section) %>%
+            ) %>%
+  ungroup() %>%
+  left_join(., ccodes_merge, by = "osuWIS") %>% # between-subjects ccodes
+  left_join(., ages, by = "DODID") %>%
+  mutate(age_c = scale(age, center = TRUE, scale = FALSE), # mean centers age
+         iq_c = scale(wasi.full2IQ, center = TRUE, scale = FALSE),
+         # converts to factor
+         osuWIS = factor(osuWIS, 
+                         levels = c("Control", "2", "3", "4", "5"),
+                         labels = c("Control","Possible", "Mild", "Mod/Severe", "Mod/Severe") 
+                        )
+         )
+
+# imports these contrasts to factor
+contrasts(wf_mod_data$osuWIS) <- ccodes_mat
+
+# Word Frequency Amodels ----
+summary(lm(w0_wf ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+summary(lm(w1_wf ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+
+# Visualizing word frequency IQ model results
+
+# W0 - c3
+w0_wf_c3_sum <- wf_mod_data %>%
+  group_by(c3) %>%
+  summarise(m = mean(w0_wf), sd = sd(w0_wf), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+
+ggplot(w0_wf_c3_sum %>% filter(c3 != 0), aes(factor(c3), m)) +
+  geom_point(data = wf_mod_data %>% filter(c3 != 0),
+             aes(y = w0_wf), shape = 1, position = pj, alpha = 1/3
+             ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05) +
+  labs(x = "Group", y = "Average WF Rating (w0)") +
+  scale_x_discrete(labels = c("-1" = "Mod/Severe TBI", "1" = "Mild TBI")) +
+  theme_minimal()
+
+# W0 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w0_wf)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Average WF Rating (w0)") +
+  theme_minimal()
+
+# W1 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w1_wf)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ (centered)", y = "Within-ss WF Effect (w1)") +
+  theme_minimal()
+
+# W1 - c3*IQ
+ggplot(wf_mod_data %>% filter(c3 != 0), 
+       aes(wasi.full2IQ, w1_wf, group = factor(c3), color = factor(c3))
+       ) +
+  geom_point(shape = 1, alpha = 2/3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "IQ", y = "Within-ss WF Effect (w1)") +
+  scale_color_manual(values = c("black", "red"), 
+                     labels = c("Mod/Severe", "Mild")
+                     ) +
+  theme_minimal()
+
+# Contextual Diversity models ----
+summary(lm(w0_cd ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+summary(lm(w1_cd ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+
+# Visualizing CD models
+
+# W0 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w0_cd)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Average CD Rating (w0)") +
+  theme_minimal()
+
+# W0 - c3
+w0_cd_c3_sum <- wf_mod_data %>%
+  group_by(c3) %>%
+  summarise(m = mean(w0_cd), sd = sd(w0_cd), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+
+ggplot(w0_cd_c3_sum %>% filter(c3 != 0), aes(factor(c3), m)) +
+  geom_point(data = wf_mod_data %>% filter(c3 != 0),
+             aes(y = w0_cd), shape = 1, position = pj, alpha = 2/3
+             ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05) +
+  labs(x = "Group", y = "Average CD Rating (w0)") +
+  scale_x_discrete(labels = c("-1" = "Mod/Severe TBI", "1" = "Mild TBI")) +
+  theme_minimal()
+
+# W1 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w1_cd)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Within-ss CD effect (w1)") +
+  theme_minimal()
+
+# W1 - c2*IQ
+ggplot(wf_mod_data %>% filter(c2 != 0), 
+       aes(wasi.full2IQ, w1_cd, group = factor(c2), color = factor(c2))
+       ) +
+  geom_point() +
+  scale_color_manual(values = c("black", "blue"), 
+                     labels = c("Mild/Mod/Severe TBI", "Possible TBI")
+                     ) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "IQ", y = "Within-ss CD effect (w1)") +
+  theme_minimal()
+
+```
+
+

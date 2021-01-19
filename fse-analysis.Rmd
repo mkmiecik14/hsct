@@ -1,0 +1,96 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(readxl)
+
+# load the FSE and Hayling data ----
+# cleaned up column names to remove spaces
+# Skipped over column names in first row
+# omitted rows with null values
+fse_src <- read_excel('dod-neuropsych-data.xlsx', sheet = 'fse', col_names = 
+                        c('dod.id', 'pre.fse.personal.care', 'pre.fse.mobility.ambulation', 'pre.fse.transportation',
+                          'pre.fse.work',	'pre.fse.leisure.recreation',	'pre.fse.home.management',
+                          'pre.fse.social.integration', 'pre.fse.behavioral.competency',	'pre.fse.standard.of.living',
+                          'pre.fse.financial.independence', 'pre.score',	'post.fse.personal.care',
+                          'post.fse.mobility.ambulation',	'post.fse.transportation',	'post.fse.work',
+                          'post.fse.leisure.recreation',	'post.fse.home.management',	'post.fse.social.integration',
+                          'post.fse.behavioral.competency',	'post.fse.standard.of.living',
+                          'post.fse.financial.independence', 'post.score',	'dpost.fse.personal.care',
+                          'dpost.fse.mobility.ambulation', 'dpost.fse.transportation',	'dpost.fse.work',
+                          'dpost.fse.leisure.recreation',	'dpost.fse.home.management', 'dpost.fse.social.integration',
+                          'dpost.fse.behavioral.competency',	'dpost.fse.standard.of.living',
+                          'dpost.fse.financial.independence',	'dpost.score'),
+                      skip = 1)
+
+fse_src <- fse_src %>% mutate(dpost.fse.personal.care=NULL,
+                              dpost.fse.mobility.ambulation=NULL, dpost.fse.transportation=NULL,	dpost.fse.work=NULL,
+                              dpost.fse.leisure.recreation=NULL,	dpost.fse.home.management=NULL, dpost.fse.social.integration=NULL,
+                              dpost.fse.behavioral.competency=NULL,	dpost.fse.standard.of.living=NULL,
+                              dpost.fse.financial.independence=NULL,	dpost.score=NULL) %>%
+  na.omit()
+
+hayling_src <- read_excel('dod-neuropsych-data.xlsx', sheet = 'hayling', col_names = 
+                            c('dod.id',	'pre.hayling.sec.1.time.raw.score',
+                              'pre.hayling.sec.1.time.scaled.score',
+                              'pre.hayling.sec.2.time.raw.score',
+                              'pre.hayling.sec.2.time.scaled.score',
+                              'pre.hayling.category.a.errors',	'pre.hayling.category.a.score',
+                              'pre.hayling.category.b.errors',	'pre.hayling.category.b.score',
+                              'pre.hayling.converted.score.ab',	'pre.hayling.2.errors.scaled.score',
+                              'pre.hayling.abc.scaled.score',	'pre.hayling.overall.scaled.score',
+                              'pre.hayling.classification',	'post.hayling.sec.1.time.raw.score',
+                              'post.hayling.sec.1.time.scaled.score',
+                              'post.hayling.sec.2.time.raw.score',
+                              'post.hayling.sec.2.time.scaled.score',
+                              'post.hayling.category.a.errors',	'post.hayling.category.a.score',
+                              'post.hayling.category.b.errors',	'post.hayling.category.b.score',
+                              'post.hayling.converted.score.ab',	'post.hayling.2.errors.scaled.score',
+                              'post.hayling.abc.scaled.score',	'post.hayling.overall.scaled.score',
+                              'post.hayling.classification',	'dpost.hayling.sec.1.time.raw.score',
+                              'dPost.hayling.sec.1.time.scaled.score',
+                              'dPost.hayling.sec.2.time.raw.score',
+                              'dPost.hayling.sec.2.time.scaled.score',
+                              'dPost.hayling.category.a.errors',	'dpost.hayling.category.a.score',
+                              'dPost.hayling.category.b.errors',	'dpost.hayling.category.b.score',
+                              'dPost.hayling.converted.Score.ab',	'dpost.hayling.2.errors.scaled.score',
+                              'dPost.hayling.abc.scaled.score', 'dPost.hayling.overall.scaled.score',
+                              'dpost.hayling.classification'),
+                          skip = 1) %>%
+  mutate(dpost.hayling.sec.1.time.raw.score=NULL,
+         dPost.hayling.sec.1.time.scaled.score=NULL,
+         dPost.hayling.sec.2.time.raw.score=NULL,
+         dPost.hayling.sec.2.time.scaled.score=NULL,
+         dPost.hayling.category.a.errors=NULL,	dpost.hayling.category.a.score=NULL,
+         dPost.hayling.category.b.errors=NULL,	dpost.hayling.category.b.score=NULL,
+         dPost.hayling.converted.Score.ab=NULL,	dpost.hayling.2.errors.scaled.score=NULL,
+         dPost.hayling.abc.scaled.score=NULL, dPost.hayling.overall.scaled.score=NULL,
+         dpost.hayling.classification=NULL)
+
+# get rid of unwanted columns, rename columns, and set correct column type----
+fse_simple <- fse_src[c('dod.id', 'pre.score', 'post.score')] %>%
+  gather(key = -dod.id, value = score, pre.score, post.score)
+fse_simple[3] <- sapply(fse_simple[3], as.numeric)
+names(fse_simple) <- c('dod.id', 'condition', 'score')
+
+hayling_simple <- hayling_src[c('dod.id', 'pre.hayling.sec.1.time.raw.score', 'pre.hayling.sec.2.time.raw.score',
+                                 'pre.hayling.category.a.errors', 'pre.hayling.category.b.errors',
+                                 'pre.hayling.overall.scaled.score', 'post.hayling.sec.1.time.raw.score',
+                                 'post.hayling.sec.2.time.raw.score', 'post.hayling.category.a.errors',
+                                 'post.hayling.category.b.errors', 'post.hayling.overall.scaled.score')] %>%
+  na.omit()
+
+# plot the pre and post fse scores----
+fse_summary <- fse_simple %>%
+  group_by(condition) %>%
+  summarize(n = n(),
+            m = mean(score),
+            sd = sd(score))
+
+ggplot(fse_simple, mapping = aes(x = condition, y = score)) +
+  geom_point(position = 'jitter')
+

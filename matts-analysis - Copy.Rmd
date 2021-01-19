@@ -1,0 +1,1226 @@
+---
+title: "HSCT Analysis"
+author: "Matt Kmiecik"
+date: "Last update: `r format(Sys.Date(), format = '%d %B %Y')`"
+output: 
+  html_document:
+    highlight: zenburn
+    theme: journal
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=F}
+# rmarkdown settings
+knitr::opts_chunk$set(
+  echo = T, 
+  warning = F, 
+  message = F, 
+  include = T, 
+  cache = F, 
+  fig.align = 'center',
+  comment = NA
+  )
+options(knitr.table.format = 'html') # For the html tables
+```
+
+## Packages
+
+```{r packages}
+pkgs <- c(
+  "knitr", "kableExtra", "Hmisc", "tidyverse", 
+  "LSAfun", "broom", "ngram", "RColorBrewer"
+  )
+xfun::pkg_attach(pkgs)
+```
+
+## Custom Functions
+
+```{r}
+# Function that simplifies the printing of tables
+matt_kable <- function(x){
+  
+  kable(x) %>%
+    kable_styling(bootstrap_options = c('striped', 'hover', 'responsive'))
+  
+}
+```
+
+## Plotting Tools
+
+```{r}
+pd <- position_dodge(width = .1)
+pj <- position_jitter(width = .1)
+
+pu_pal <- brewer.pal(9, "Purples") # display.brewer.pal(9, "Purples")
+```
+
+## Prepro Scripts
+
+This chunk runs the pre-processing scripts:
+
+```{r}
+source("dod-prepro.R")
+# the above prepro script creates the following:
+# load("dod-pre-data.RData")          # From DOD study
+# load("dod-hayling-tbi-trim.RData")  # From DOD study
+# load("dod-hayling-ctl-trim.RData")  # From DOD study
+
+source("control-prepro.R")
+# the above prepro script creates the following:
+# load("control-hsct-data.RData")   # From HSCT Control study
+# load("control-iq-data.RData")     # From HSCT Control study
+# load("control-demo-data.RData")   # From HSCT Control study
+
+source("lsa-prepro.R")
+# The above prepro script creates the following:
+# load("lsa-data.RData")
+```
+
+## Data
+
+This chunk will load various data frames prepared from preprocessing scripts.
+
+```{r dataload}
+# Neuropsych data ----
+# These data were created by running: source("dod-prepro.R")
+load("dod-pre-data.RData")            # From DOD study
+
+# From source("control-prepro.R")
+load("control-hsct-data.RData")       # From HSCT Control study
+
+# These data were created by running: source("control-prepro.R")
+load("control-iq-data.RData")         # From HSCT Control study
+
+# Demographic data ----
+load("control-demo-data.RData")       # From HSCT Control study
+
+# LSA, WF, and CD measures ----
+load("lsa-data.RData")
+load("wf-data.RData")
+```
+
+## Step 1
+
+Seeing if groups are balanced:
+
+```{r}
+# DOD
+# This pipeline prepares the DOD neuropsych data to match the HSCT control study
+dod_neuropsych <- dod_pre %>%
+  select(DODID = dodID, 
+         group = participantType, 
+         yrEd, 
+         sex, 
+         age, 
+         audit, 
+         bdi,
+         sc.time.raw = sec1RawScore,
+         sc.time.scaled = sec1SS,
+         uc.time.raw = sec2RawScore,
+         uc.time.scaled = sec2SS,
+         cat.a.errors = catAErrors,
+         a.score = aScore,
+         cat.b.errors = catBErrors,
+         b.score = bScore,
+         ab.score = abScore,
+         errors.scaled = sec2ErrorsSS,
+         total.scaled = abcSS,
+         hsct.scaled = overallSS,
+         wasi.vocab.rscore = vocabRawScore,
+         wasi.vocab.tscore = vocabTScore,
+         wasi.similarities.rscore = similaritiesRawScore,
+         wasi.similarities.tscore = similaritiesTScore,
+         wasi.matrix.rscore = matrixRawScore,
+         wasi.matrix.tscore = matrixTScore,
+         # wasi.viq = ,    Not available in DOD data, but is possible to obtain
+         wasi.full2IQ = wasiIQ,
+         wtar.rscore = wtarRawScore,
+         wtar.sscore = wtarSS
+         ) %>%
+  rowwise() %>%
+  mutate(wasi.tverbal = sum(wasi.vocab.tscore, wasi.similarities.tscore),
+         wasi.full2subtest = sum(wasi.vocab.tscore, wasi.matrix.tscore),
+         audit = as.numeric(audit)
+         ) %>%
+  ungroup() %>%
+  filter(complete.cases(hsct.scaled)) %>% # removes ss if they don't have HSCT
+  # removes if they don't have HSCT words
+  filter(DODID %in% unique(lsa_data$DODID)) %>%
+  # The following participants need to be removed bc of the following:
+  #   DOD-0276 : brain tumor
+  #   DOD-0381 : has Erb's Palsy and embolisms due to diving accident
+  #   DOD-1114 : has bipolar and depression
+  #   DOD-5359 : did not have a TBI, but had LOC due to lack of oxygen
+  filter(DODID %nin% c("DOD-0276", "DOD-0381", "DOD-1114", "DOD-5359"))
+
+# HSCT controls
+# This pipeline prepares the HSCT control data to match the DOD neuropsych data
+hsct_neuropsych <- control_iq_data %>% 
+  inner_join(
+    ., 
+    control_demo_data %>% mutate(ssID = as.numeric(ID)), 
+    by = "ssID"
+    ) %>%
+  inner_join(., control_hsct_data, by = "ssID") %>%
+  select(DODID = ssID,
+         starts_with("wasi"),
+         sex = Sex,
+         age = Age,
+         yrEd = Edu,
+         audit = AUDIT_SCORE,
+         bdi = BDI_SCORE,
+         sc.time.raw:hsct.scaled,
+         starts_with("wasi"),
+         starts_with("wtar")
+         ) %>%
+  filter(complete.cases(hsct.scaled)) %>%
+  filter(DODID != 3231 | DODID != 5481 | DODID != 1370) %>% # DROP THESE SS
+  mutate(
+    group = "Control", 
+    DODID = as.character(DODID), 
+    yrEd = as.numeric(yrEd),
+    age = as.numeric(age),
+    bdi = as.numeric(bdi),
+    audit = as.numeric(audit)
+    ) 
+
+# Combines all demo and neuropsych into one df
+demo_neuropsych <- bind_rows(hsct_neuropsych, dod_neuropsych)
+```
+
+Now, let's drop participants that have AUDIT scores > 10, as Kmiecik et al. (2018) did this, and summaize all measures separated by group.
+
+A couple of important NAs will emerge:
+
+* DOD-1879 has no BDI
+* DOD-3484 was only administered 1/2 of the BDI form
+
+The rest of the NAs that did emerge: we went through the paper copies and updated the "dod-neuropsych-data.xlsx" sheet = "mattDatabase_addedHSCT_SS"
+
+Also, we are taking a look at if we were to look at the groups separated by OSU worst injury score:
+
+1 = "improbable TBI"
+2 = "possible TBI"
+3 = "mild TBI"
+4 = "moderately severe TBI"
+5 = "more severe TBI"
+
+We split this into 3 comparisons:
+
+* Control vs TBI (all severities)
+* Possible TBI vs. Mild + Moderate/Severe TBI
+* Mild vs. Moderate/Severe TBI
+
+```{r}
+# Let's first gather the TBI injury information
+osu <- dod_pre %>% select(DODID = dodID, osuWorstInjury)
+
+# Cleaning up the big df with various measures
+demo_neuropsych_clean <- demo_neuropsych %>% 
+  filter(audit <= 10) %>% # drops ss with elevated audit scores
+  left_join(., osu, by = "DODID") %>% # inserts OSU Scores
+  mutate(
+    osuWorstInjury = case_when(
+      is.na(osuWorstInjury) ~ "Control",
+      osuWorstInjury == 2 ~ "Possible",
+      osuWorstInjury == 3 ~ "Mild",
+      osuWorstInjury == 4 ~ "Mod/Severe",
+      osuWorstInjury == 5 ~ "Mod/Severe"
+      ),
+    osuWorstInjury = factor(osuWorstInjury) # converts to factor
+  )
+
+# Specifies contrasts
+# This helps with the linear modeling
+contrasts(demo_neuropsych_clean$osuWorstInjury) <-
+  cbind(
+    CvTBI = c(+3, -1, -1, -1),
+    PvMMS = c(0, -1, -1, +2),
+    MvMS  = c(0, +1, -1, 0)
+    )
+
+# Long format
+demo_neuropsych_long <- demo_neuropsych_clean %>%
+  select(-group) %>% # don't need this anymore
+  gather(meas, value, -DODID, -osuWorstInjury)
+
+# Summarizes demographic and HSCT standard data
+demo_clean_desc <- demo_neuropsych_long %>%
+  filter(meas %nin% "sex") %>%
+  mutate(value = as.numeric(value)) %>%
+  group_by(osuWorstInjury, meas) %>%
+  summarise(
+    n = n(),
+    n.na = sum(is.na(value)),
+    m = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE)
+    ) %>%
+  ungroup()
+# Saves out these results
+write_csv(demo_clean_desc, path = "res-demo-neuropsych-descriptives.csv")
+matt_kable(demo_clean_desc %>% arrange(meas)) # Prints these to table
+
+# Looking a those with NAs
+# yo <- demo_neuropsych_clean %>% filter(is.na(value))
+# Notes about the NAs:
+# - None of the control DOD participants were administered the WTAR
+# - The DOD database does not store the verbal IQ, just the t-scores
+
+# TBI measures
+dod_pre %>%
+  filter(dodID %in% unique(demo_neuropsych_clean$DODID)) %>%
+  select(dodID, osuWorstInjury) %>%
+  count(osuWorstInjury) # The NA's are from DOD controls
+
+# Runs linear model on whole data set
+demo_neuropsych_lm <- demo_neuropsych_long %>%
+  # filters out non numeric vars and vars with all NAs
+  filter(meas %nin% c("sex", "wasi.viq", "wtar.rscore", "wtar.sscore")) %>% 
+  group_by(meas) %>%
+  do(mod = lm(value ~ 1 + osuWorstInjury, data = .))
+
+# Tidying the lms to plot
+demo_neuropsych_tidy <- demo_neuropsych_lm %>% 
+  tidy(mod, conf.int = TRUE, conf.level = .95) %>%
+  mutate(sig = ifelse(p.value < .05, "True", "False")) %>%
+  ungroup()
+
+# plotting the lms to see what is different between the groups
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryCvTBI"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryCvTBI") +
+  theme_minimal()
+
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryPvMMS"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryPvMMS") +
+  theme_minimal()
+
+ggplot(
+  demo_neuropsych_tidy %>% filter(term == "osuWorstInjuryMvMS"),
+  aes(statistic, reorder(meas, statistic), color = sig)
+  ) +
+  geom_point() +
+  labs(x = "t-value", y = "measure", title = "osuWorstInjuryMvMS") +
+  theme_minimal()
+
+# Table of participants included in analyses
+# matt_kable(
+#   demo_neuropsych_clean %>% filter(meas == "age") %>% select(DODID, group)
+#   )
+```
+
+## Paper Table
+
+Depicts modeling, controlling for age and IQ, of category A + category B errors, and HSCT Scaled Scores.
+
+```{r}
+# For paper table of category A + category B errors and HSCT Scaled scores ----
+cat_A_mod <- lm(
+  cat.a.errors ~ 1 + 
+    scale(age, scale = FALSE) + 
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, 
+  data = demo_neuropsych_clean
+  )
+
+cat_B_mod <- lm(
+  cat.b.errors ~ 1 + 
+    scale(age, scale = FALSE) + 
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, 
+  data = demo_neuropsych_clean
+  )
+
+hsct_scaled_mod <- lm(
+  hsct.scaled ~ 1 + 
+    scale(age, scale = FALSE) + 
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, 
+  data = demo_neuropsych_clean
+  )
+
+# Tidying up the models
+cat_A_mod_tidy <- tidy(cat_A_mod, conf.int = TRUE, conf.level = .95) %>% 
+  mutate(Model = "Category A Errors")
+
+cat_B_mod_tidy <- tidy(cat_B_mod, conf.int = TRUE, conf.level = .95) %>% 
+  mutate(Model = "Category B Errors")
+
+hsct_scaled_mod_tidy <- tidy(hsct_scaled_mod, conf.int = TRUE, conf.level = .95) %>% 
+  mutate(Model = "HSCT Overall Scaled Scores")
+
+# Combining them into one df and renaming
+above_models_tidy <- bind_rows(cat_A_mod_tidy, cat_B_mod_tidy, hsct_scaled_mod_tidy) %>%
+  mutate(term = case_when(
+    term == "(Intercept)" ~ "Intercept",
+    term == "scale(age, scale = FALSE)" ~ "Age",
+    term == "scale(wasi.full2IQ, scale = FALSE)" ~ "IQ",
+    term == "osuWorstInjuryCvTBI" ~ "Control vs. TBI",
+    term == "osuWorstInjuryPvMMS" ~ "Possible vs. Mild/Moderate/Severe TBI",
+    term == "osuWorstInjuryMvMS" ~ "Mild vs. Moderate/Severe TBI",
+    TRUE ~ as.character(term)
+  )
+  ) %>%
+  select(
+    Model, Term = term, b = estimate,  LL = conf.low, UL = conf.high,
+    SE = std.error, t = statistic, p = p.value, 
+    )
+
+# Save out to further polish in excel for paper
+write_csv(above_models_tidy, path = "paper-table-error-mods.csv")
+```
+
+## LSA
+
+```{r lsa}
+# Calculates LSA summary data
+lsa_data_sum <- lsa_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(DODID, section) %>%
+  summarize(lsa.m = mean(lsa, na.rm = TRUE), sd = sd(lsa, na.rm = TRUE), n = n()) %>%
+  ungroup()
+
+# Calculates the main effect of HSCT section
+# joins with neuropsych
+lsa_sum_iq <- lsa_data_sum %>%
+  group_by(DODID) %>%
+  summarise(lsa_diff = -diff(lsa.m)) %>%
+  inner_join(
+    ., 
+    demo_neuropsych_clean, 
+    by = "DODID"
+    ) %>%
+  mutate(group = NULL) %>%
+  ungroup()
+```
+
+```{r}
+# Modeling LSA
+lsa_mod <- lm(lsa_diff ~ 1 + scale(age, scale = FALSE) + scale(wasi.full2IQ, scale = FALSE) + osuWorstInjury, data = lsa_sum_iq)
+summary(lsa_mod)
+
+# SUBJECT-WISE summary
+lsa_data_ss <- lsa_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(DODID, group, section) %>%
+  summarise(n = n(), n.na = sum(is.na(lsa)), mLSA = mean(lsa, na.rm = T)) %>%
+  ungroup() %>%
+  left_join(., demo_neuropsych_clean, by = "DODID") %>%
+  mutate(group.x = NULL, group.y = NULL) %>%
+  mutate(
+    c1 = ifelse(osuWorstInjury == "Control", "Control", "TBI"),
+    c2 = case_when(
+      osuWorstInjury == "Possible" ~ "Possible",
+      osuWorstInjury == "Mild" ~ "Mild/Mod/Severe",
+      osuWorstInjury == "Mod/Severe" ~ "Mild/Mod/Severe",
+      TRUE ~ as.character(osuWorstInjury)
+    ),
+    c3 = case_when(
+      osuWorstInjury == "Mild" ~ "Mild",
+      osuWorstInjury == "Mod/Severe" ~ "Mod/Severe",
+      TRUE ~ as.character(osuWorstInjury)
+    )
+    )
+
+# GROUP-WISE summary
+lsa_data_sum_c1 <- lsa_data_ss %>% 
+  group_by(c1, section) %>%
+  summarise(N = n(), m = mean(mLSA), sd = sd(mLSA), sem = sd/sqrt(N)) %>%
+  ungroup()
+  
+# Plot using OSU scores
+# pd <- position_dodge(width = .1)
+# pj <- position_jitter(width = .1)
+
+clrPalt <- brewer.pal(11, "PRGn")
+clr_ctrl <- clrPalt[3]
+clr_tbi <- clrPalt[10]
+
+# PAPER FIGURE
+# SD error bars
+ggplot(lsa_data_sum_c1, aes(section, m, group = c1, color = c1)) +
+  geom_point(
+    data = lsa_data_ss, aes(y = mLSA), 
+    shape = 1, alpha = 1/3, position = pj, size = 2
+    ) +
+  geom_point(position = pd, size = 2.5) +
+  geom_errorbar(
+    aes(ymin = m-sd, ymax = m+sd), 
+    width = .05, position = pd, size = .75
+    ) +
+  geom_line(position = pd, size = .5) +
+  labs(x = "Section", y="Mean LSA Score \n", color = "group") +
+  scale_color_manual(values = c(clr_ctrl, clr_tbi))+
+  #coord_cartesian(ylim = c(.4, .6)) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+ggsave("paper-figure-lsa.svg", width = 95, height = 117, units = "mm")
+
+ggplot(lsa_sum_iq, aes(wasi.full2IQ, lsa_diff)) +
+  geom_point(aes(color = osuWorstInjury)) +
+  geom_smooth(method = "lm", se = TRUE, color = "black", linetype = 2, alpha = 1/3) +
+  theme_minimal()
+```
+
+## HSCT Time
+
+```{r}
+# HSCT Time model
+hsct_time_mod <- lm(
+  sc.time.raw - uc.time.raw ~ 1 + 
+    scale(age, scale = FALSE) + 
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, data = demo_neuropsych_clean
+  )
+summary(hsct_time_mod)
+anova(hsct_time_mod)
+
+# Age vs. main effect of section time
+ggplot(demo_neuropsych_clean, aes(age, sc.time.raw - uc.time.raw)) +
+  geom_point(aes(color = osuWorstInjury)) +
+  geom_smooth(method = "lm", color = "black", linetype = 2, alpha = 1/3) +
+  theme_minimal()
+
+hsct_time_ss <- demo_neuropsych_clean %>% 
+  select(DODID, sc.time.raw, uc.time.raw, group) %>%
+  gather(section, time, -DODID, -group)
+
+hsct_time_sum <- hsct_time_ss %>%
+  group_by(group, section) %>%
+  summarise(m = mean(time), sd = sd(time), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+
+# PAPER FIGURE
+# SD error bars
+ggplot(hsct_time_sum, aes(section, m, group = group, color = group)) +
+  geom_point(
+    data = hsct_time_ss, aes(y = time),
+    shape = 1, alpha = 1/3, position = pj, size = 2) +
+  geom_point(position = pd, size = 3) +
+  geom_errorbar(aes(ymin = m - sd, ymax = m + sd),
+    width = .05, position = pd, size = .75) +
+  geom_line(position = pd, size = .5) +
+  labs(x = "Hayling Section", y = "Mean HSCT Section Time \n") +
+  scale_color_manual(values = c(clr_ctrl, clr_tbi))+
+  theme_minimal() +
+  theme(legend.position = "none")
+  #theme(legend.position = "bottom")
+
+ggsave("paper-figure-hsct-time.svg", width = 95, height = 117, units = "mm")
+```
+
+## Word Frequency
+
+```{r}
+# Calculates the main effect of HSCT section wf + cd
+# joins with neuropsych
+wf_sum_iq <- wf_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(DODID) %>%
+  summarise(wf_diff = -diff(m_wf), cd_diff = -diff(m_cd)) %>%
+  inner_join(
+    ., 
+    demo_neuropsych_clean, 
+    by = "DODID"
+    ) %>%
+  mutate(group = NULL) %>%
+  ungroup()
+```
+
+```{r}
+wf_mod <- lm(
+  wf_diff ~ 1 + 
+    scale(age, scale = FALSE) +
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, 
+  data = wf_sum_iq
+  )
+summary(wf_mod)
+
+cd_mod <- lm(
+  cd_diff ~ 1 + 
+    scale(age, scale = FALSE) +
+    scale(wasi.full2IQ, scale = FALSE) + 
+    osuWorstInjury, 
+  data = wf_sum_iq
+  )
+summary(cd_mod)
+
+ggplot(wf_sum_iq, aes(wasi.full2IQ, wf_diff)) +
+  geom_point(aes(color = osuWorstInjury)) +
+  geom_smooth(
+    method = "lm", se = TRUE, alpha = 1/3, color = "black", linetype = 2
+    ) +
+  theme_minimal()
+
+ggplot(wf_sum_iq, aes(wasi.full2IQ, cd_diff)) +
+  geom_point(aes(color = osuWorstInjury)) +
+  geom_smooth(
+    method = "lm", se = TRUE, alpha = 1/3, color = "black", linetype = 2
+    ) +
+  theme_minimal()
+
+wf_data_sum <- wf_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  select(DODID, section, m_wf, m_cd) %>%
+  group_by(section) %>%
+  summarise_at(vars(c(m_wf:m_cd)), list(mean = mean, sd = sd, n = function(x){n()})) %>%
+  mutate(sem_wf = m_wf_sd/sqrt(m_wf_n), sem_cd = m_cd_sd/sqrt(m_cd_n))
+
+# Converting to long format
+wf_data_sum_long <- wf_data_sum %>%
+  gather(section, measure = m_wf_mean:sem_cd)
+
+ggplot(wf_data_sum, aes(section, m_wf_mean, group = 1)) +
+  geom_point(data = )
+  geom_line(linetype = 2, alpha = 1/3) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m_wf_mean - sem_wf, ymax = m_wf_mean + sem_wf), width = .1) +
+  theme_minimal()
+```
+
+## Creating Linear Modeling Table
+
+```{r}
+# Tidys up models and computes 95% CIs
+time_mod_tidy <- tidy(hsct_time_mod, conf.int = TRUE, conf.level = .95) %>% mutate(Model = "Time")
+lsa_mod_tidy  <- tidy(lsa_mod, conf.int = TRUE, conf.level = .95)  %>% mutate(Model = "LSA")
+wf_mod_tidy   <- tidy(wf_mod, conf.int = TRUE, conf.level = .95)  %>% mutate(Model = "Word Frequency")
+cd_mod_tidy   <- tidy(cd_mod, conf.int = TRUE, conf.level = .95)  %>% mutate(Model = "Contextual Diversity")
+
+# Assembles to a table and cleans up naming/order of columns
+all_models_tidy <- bind_rows(time_mod_tidy, lsa_mod_tidy, wf_mod_tidy, cd_mod_tidy) %>%
+  mutate(term = case_when(
+    term == "(Intercept)" ~ "Intercept",
+    term == "scale(age, scale = FALSE)" ~ "Age",
+    term == "scale(wasi.full2IQ, scale = FALSE)" ~ "IQ",
+    term == "osuWorstInjuryCvTBI" ~ "Control vs. TBI",
+    term == "osuWorstInjuryPvMMS" ~ "Possible vs. Mild/Moderate/Severe TBI",
+    term == "osuWorstInjuryMvMS" ~ "Mild vs. Moderate/Severe TBI",
+    TRUE ~ as.character(term)
+  )
+  ) %>%
+  select(
+    Model, Term = term, b = estimate,  LL = conf.low, UL = conf.high,
+    SE = std.error, t = statistic, p = p.value, 
+    )
+
+# Writes out to CSV for paper
+write_csv(all_models_tidy, path = "paper-table-reg-mods.csv")
+```
+
+## HSCT Measure Descriptive Table
+
+```{r}
+# Hayling Data
+hsct_desc <- demo_neuropsych_clean %>%
+  mutate(
+    c1 = ifelse(osuWorstInjury == "Control", "Control", "TBI"),
+    c2 = case_when(
+      osuWorstInjury == "Control" ~ "Do Not Include",
+      osuWorstInjury == "Possible" ~ "Possible",
+      osuWorstInjury == "Mild" ~ "Mild/Moderate/Severe",
+      osuWorstInjury == "Mod/Severe" ~ "Mild/Moderate/Severe",
+      TRUE ~ as.character(osuWorstInjury)
+    ),
+    c3 = case_when(
+      osuWorstInjury %in% c("Control", "Possible") ~ "Do Not Include",
+      TRUE ~ as.character(osuWorstInjury)
+    )
+    ) %>%
+  select(DODID, c1:c3, sc.time.raw:hsct.scaled)
+
+# WF + CD Data
+wf_data_wide <- wf_data %>% 
+  select(DODID, section, m_wf) %>% 
+  spread(key = section, value = m_wf) %>%
+  rename(wf_sc = SC, wf_uc = UC)
+
+cd_data_wide <- wf_data %>% 
+  select(DODID, section, m_cd) %>% 
+  spread(key = section, value = m_cd) %>%
+  rename(cd_sc = SC, cd_uc = UC)
+
+# LSA Data
+lsa_data_wide <- lsa_data_ss %>% 
+  select(DODID, section, mLSA) %>% 
+  spread(section, mLSA) %>%
+  rename(lsa_sc = SC, lsa_uc = UC)
+
+# Combining data
+hsct_desc_data <- left_join(hsct_desc, wf_data_wide, by = "DODID") %>%
+  left_join(., cd_data_wide, by = "DODID") %>%
+  left_join(., lsa_data_wide, by = "DODID")
+
+# Contrast 1 - Controls vs. TBI
+c1_desc <- hsct_desc_data %>%
+  select(-c2, -c3) %>%
+  gather(meas, value, -DODID, -c1) %>%
+  group_by(c1, meas) %>%
+  summarise(m = mean(value), sd = sd(value), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup() %>%
+  mutate(contrast = "c1")
+
+# Contrast 2 - Possible vs. Mild/Moderate/Severe TBI
+c2_desc <- hsct_desc_data %>%
+  select(-c1, -c3) %>%
+  gather(meas, value, -DODID, -c2) %>%
+  group_by(c2, meas) %>%
+  summarise(m = mean(value), sd = sd(value), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup() %>%
+  mutate(contrast = "c2")
+
+# Contrast 3 - Mild vs. Moderate/Severe TBI
+c3_desc <- hsct_desc_data %>%
+  select(-c1, -c2) %>%
+  gather(meas, value, -DODID, -c3) %>%
+  group_by(c3, meas) %>%
+  summarise(m = mean(value), sd = sd(value), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup() %>%
+  mutate(contrast = "c3")
+
+# Now clean up the names and drop uncessary info from the table.
+c1_desc_c
+```
+
+
+
+```{r}
+# Creating the tables
+# Andrew
+
+# Row names
+demo_row_names <- c("Vocab", "Similarities", "Matrix", "Full2", "Age", "Male", "Female", "Asian",
+               "Black or African American", "Hispanic, spanish, or Latino", "Mixed Race", "White")
+# Hayling row names
+hayling_row_names <- c("sc.time.raw", "sc.time.scaled", "sc.wf", "sc.cd", "uc.time.raw", "uc.time.scaled",
+                      "uc.wf", "uc.cd", "cat.a.errors", "cat.b.errors")
+
+# Column names
+col_names <- c("control m(sd)", "control N", "tbi m(sd)", "tbi N", "possible m(sd)", "possible N", "mild/mod/sev m(sd)",
+               "mild/mod/sev N", "mild m(sd)", "mild N", "mod/sev m(sd)", "mod/sev N")
+
+# Prepare a table with all of the participants and the relevant measures
+contrast_table <- left_join(
+  full_join(
+    lsa_data_ss %>%
+      select(DODID, section, wasi.vocab.rscore, wasi.similarities.rscore, wasi.matrix.rscore, wasi.full2subtest,
+             sc.time.raw, sc.time.scaled, uc.time.raw, uc.time.scaled, cat.a.errors, cat.b.errors),
+    rbind(
+      dod_pre %>%
+        select(DODID = dodID, sex, race, age) %>%
+        left_join(demo_neuropsych_clean %>% select(DODID, osuWorstInjury), .) %>%
+        na.omit(),
+      control_demo_data %>%
+        select(DODID = ID, sex = Sex, race=Race, age=Age) %>%
+        left_join(demo_neuropsych_clean %>% select(DODID, osuWorstInjury), .) %>%
+        na.omit()
+      )
+    ),
+  wf_data %>%
+    select(DODID, section, m_wf, m_cd)
+  ) %>%
+  mutate(age = as.numeric(age))
+
+contrast_table <- left_join(
+  contrast_table %>%
+    filter(section == "UC") %>%
+    select(DODID, uc.wf = m_wf, uc.cd = m_cd),
+  contrast_table
+  ) %>%
+  filter(section == "SC") %>%
+  mutate(sc.wf = m_wf, m_wf = NULL, sc.cd = m_cd, m_cd = NULL)
+
+contrast_table$race[contrast_table$race == "Black or African American" |
+                      contrast_table$race == "AA"] <- "African American"
+contrast_table$race[contrast_table$race == "Hispanic, Spanish, or Latino"] <- "Hispanic"
+contrast_table$race[contrast_table$race == "Mixed" | contrast_table$race == "Other" |
+                      contrast_table$race == "Mixed Race" | contrast_table$race == "Multiple"] <- "Unknown"
+contrast_table %>% mutate(race = as.factor(race))
+
+contrast_table <- contrast_table %>% mutate(race = as.factor(race))
+
+# Get the vocab, similarities, matrix, full2, and age for the controls
+c1.a <- contrast_table %>% 
+  filter(osuWorstInjury == "Control")
+c1.b <- contrast_table %>% 
+  filter(osuWorstInjury %in% c("Mild","Mod/Severe","Possible"))
+c2.a <- contrast_table %>% 
+  filter(osuWorstInjury == "Possible")
+c2.b <- contrast_table %>% 
+  filter(osuWorstInjury %in% c("Mild","Mod/Severe"))
+c3.a <- contrast_table %>% 
+  filter(osuWorstInjury == "Mild")
+c3.b <- contrast_table %>% 
+  filter(osuWorstInjury == "Mod/Severe")
+
+# Count the number of each race in each contrast group
+c1.a.n <- c1.a %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race)
+c1.b.n <- c1.b %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race) %>% mutate(race = NULL)
+c2.a.n <- c2.a %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race) %>% mutate(race = NULL)
+c2.b.n <- c2.b %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race) %>% mutate(race = NULL)
+c3.a.n <- c3.a %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race) %>% mutate(race = NULL)
+c3.b.n <- c3.b %>% group_by(race) %>% summarise(n=n()) %>% ungroup() %>% complete(race) %>% mutate(race = NULL)
+contrast_races <- cbind(c1.a.n, cbind(c1.b.n, cbind(c2.a.n, cbind(c2.b.n, cbind(c3.a.n, c3.b.n)))))
+names(contrast_races) <- c("measure", "controls", "tbi", "possible", "mild.mod.sev", "mild", "mod.sev")
+
+# Fill out the mean values for the first contrast
+c1.m <- full_join(rbind(
+  c1.a %>%
+    summarise(vocab.m = mean(wasi.vocab.rscore),
+              similarities.m = mean(wasi.similarities.rscore),
+              matrix.m = mean(wasi.matrix.rscore),
+              full2.m = mean(wasi.full2subtest),
+              age.m = mean(age),
+              sc.time.raw.m = mean(sc.time.raw),
+              sc.time.scaled.m = mean(sc.time.scaled),
+              uc.time.raw.m = mean(uc.time.raw),
+              uc.time.scaled.m = mean(uc.time.scaled),
+              cat.a.errors.m = mean(cat.a.errors),
+              cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+    gather(measure, controls),
+  c1.a %>%
+    group_by(sex) %>%
+    summarise(controls = n()) %>%
+    mutate(measure = sex, sex = NULL)
+  ),
+  rbind(c1.b %>%
+          summarise(vocab.m = mean(wasi.vocab.rscore),
+                    similarities.m = mean(wasi.similarities.rscore),
+                    matrix.m = mean(wasi.matrix.rscore),
+                    full2.m = mean(wasi.full2subtest),
+                    age.m = mean(age),
+                    sc.time.raw.m = mean(sc.time.raw),
+                    sc.time.scaled.m = mean(sc.time.scaled),
+                    uc.time.raw.m = mean(uc.time.raw),
+                    uc.time.scaled.m = mean(uc.time.scaled),
+                    cat.a.errors.m = mean(cat.a.errors),
+                    cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+          gather(measure, tbi),
+        c1.b %>%
+          group_by(sex) %>%
+          summarise(tbi = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+# Fill out the mean values for the second contrast
+c2.m <- full_join(
+  rbind(c2.a %>%
+          summarise(vocab.m = mean(wasi.vocab.rscore),
+                    similarities.m = mean(wasi.similarities.rscore),
+                    matrix.m = mean(wasi.matrix.rscore),
+                    full2.m = mean(wasi.full2subtest),
+                    age.m = mean(age),
+              sc.time.raw.m = mean(sc.time.raw),
+              sc.time.scaled.m = mean(sc.time.scaled),
+              uc.time.raw.m = mean(uc.time.raw),
+              uc.time.scaled.m = mean(uc.time.scaled),
+              cat.a.errors.m = mean(cat.a.errors),
+              cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+          gather(measure, possible),
+        c2.a %>%
+          group_by(sex) %>%
+          summarise(possible = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        ),
+  rbind(c2.b %>%
+          summarise(vocab.m = mean(wasi.vocab.rscore),
+                    similarities.m = mean(wasi.similarities.rscore),
+                    matrix.m = mean(wasi.matrix.rscore),
+                    full2.m = mean(wasi.full2subtest),
+                    age.m = mean(age),
+              sc.time.raw.m = mean(sc.time.raw),
+              sc.time.scaled.m = mean(sc.time.scaled),
+              uc.time.raw.m = mean(uc.time.raw),
+              uc.time.scaled.m = mean(uc.time.scaled),
+              cat.a.errors.m = mean(cat.a.errors),
+              cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+          gather(measure, mild.mod.sev),
+        c2.b %>%
+          group_by(sex) %>%
+          summarise(mild.mod.sev = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+# Fill out the mean values for the third contrast
+c3.m <- full_join(
+  rbind(c3.a %>%
+          summarise(vocab.m = mean(wasi.vocab.rscore),
+                    similarities.m = mean(wasi.similarities.rscore),
+                    matrix.m = mean(wasi.matrix.rscore),
+                    full2.m = mean(wasi.full2subtest),
+                    age.m = mean(age),
+              sc.time.raw.m = mean(sc.time.raw),
+              sc.time.scaled.m = mean(sc.time.scaled),
+              uc.time.raw.m = mean(uc.time.raw),
+              uc.time.scaled.m = mean(uc.time.scaled),
+              cat.a.errors.m = mean(cat.a.errors),
+              cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+          gather(measure, mild),
+        c3.a %>%
+          group_by(sex) %>%
+          summarise(mild = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        ),
+  rbind(c3.b %>%
+          summarise(vocab.m = mean(wasi.vocab.rscore),
+                    similarities.m = mean(wasi.similarities.rscore),
+                    matrix.m = mean(wasi.matrix.rscore),
+                    full2.m = mean(wasi.full2subtest),
+                    age.m = mean(age),
+              sc.time.raw.m = mean(sc.time.raw),
+              sc.time.scaled.m = mean(sc.time.scaled),
+              uc.time.raw.m = mean(uc.time.raw),
+              uc.time.scaled.m = mean(uc.time.scaled),
+              cat.a.errors.m = mean(cat.a.errors),
+              cat.b.errors.m = mean(cat.b.errors),
+              sc.wf.m = mean(sc.wf),
+              sc.cd.m = mean(sc.cd),
+              uc.wf.m = mean(uc.wf),
+              uc.cd.m = mean(uc.cd)) %>%
+          gather(measure, mod.sev),
+        c3.b %>%
+          group_by(sex) %>%
+          summarise(mod.sev = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+# Fill out the sd values for the first contrast
+c1.sd <- full_join(rbind(
+  c1.a %>%
+    summarise(vocab.sd = sd(wasi.vocab.rscore),
+              similarities.sd = sd(wasi.similarities.rscore),
+              matrix.sd = sd(wasi.matrix.rscore),
+              full2.sd = sd(wasi.full2subtest),
+              age.sd = sd(age),
+              sc.time.raw.sd = sd(sc.time.raw),
+              sc.time.scaled.sd = sd(sc.time.scaled),
+              uc.time.raw.sd = sd(uc.time.raw),
+              uc.time.scaled.sd = sd(uc.time.scaled),
+              cat.a.errors.sd = sd(cat.a.errors),
+              cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+    gather(measure, controls),
+  c1.a %>%
+    group_by(sex) %>%
+    summarise(controls = n()) %>%
+    mutate(measure = sex, sex = NULL)
+  ),
+  rbind(c1.b %>%
+          summarise(vocab.sd = sd(wasi.vocab.rscore),
+                    similarities.sd = sd(wasi.similarities.rscore),
+                    matrix.sd = sd(wasi.matrix.rscore),
+                    full2.sd = sd(wasi.full2subtest),
+                    age.sd = sd(age),
+                    sc.time.raw.sd = sd(sc.time.raw),
+                    sc.time.scaled.sd = sd(sc.time.scaled),
+                    uc.time.raw.sd = sd(uc.time.raw),
+                    uc.time.scaled.sd = sd(uc.time.scaled),
+                    cat.a.errors.sd = sd(cat.a.errors),
+                    cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+          gather(measure, tbi),
+        c1.b %>%
+          group_by(sex) %>%
+          summarise(tbi = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+# Fill out the sd values for the second contrast
+c2.sd <- full_join(
+  rbind(c2.a %>%
+          summarise(vocab.sd = sd(wasi.vocab.rscore),
+                    similarities.sd = sd(wasi.similarities.rscore),
+                    matrix.sd = sd(wasi.matrix.rscore),
+                    full2.sd = sd(wasi.full2subtest),
+                    age.sd = sd(age),
+              sc.time.raw.sd = sd(sc.time.raw),
+              sc.time.scaled.sd = sd(sc.time.scaled),
+              uc.time.raw.sd = sd(uc.time.raw),
+              uc.time.scaled.sd = sd(uc.time.scaled),
+              cat.a.errors.sd = sd(cat.a.errors),
+              cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+          gather(measure, possible),
+        c2.a %>%
+          group_by(sex) %>%
+          summarise(possible = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        ),
+  rbind(c2.b %>%
+          summarise(vocab.sd = sd(wasi.vocab.rscore),
+                    similarities.sd = sd(wasi.similarities.rscore),
+                    matrix.sd = sd(wasi.matrix.rscore),
+                    full2.sd = sd(wasi.full2subtest),
+                    age.sd = sd(age),
+              sc.time.raw.sd = sd(sc.time.raw),
+              sc.time.scaled.sd = sd(sc.time.scaled),
+              uc.time.raw.sd = sd(uc.time.raw),
+              uc.time.scaled.sd = sd(uc.time.scaled),
+              cat.a.errors.sd = sd(cat.a.errors),
+              cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+          gather(measure, mild.mod.sev),
+        c2.b %>%
+          group_by(sex) %>%
+          summarise(mild.mod.sev = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+# Fill out the sd values for the third contrast
+c3.sd <- full_join(
+  rbind(c3.a %>%
+          summarise(vocab.sd = sd(wasi.vocab.rscore),
+                    similarities.sd = sd(wasi.similarities.rscore),
+                    matrix.sd = sd(wasi.matrix.rscore),
+                    full2.sd = sd(wasi.full2subtest),
+                    age.sd = sd(age),
+              sc.time.raw.sd = sd(sc.time.raw),
+              sc.time.scaled.sd = sd(sc.time.scaled),
+              uc.time.raw.sd = sd(uc.time.raw),
+              uc.time.scaled.sd = sd(uc.time.scaled),
+              cat.a.errors.sd = sd(cat.a.errors),
+              cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+          gather(measure, mild),
+        c3.a %>%
+          group_by(sex) %>%
+          summarise(mild = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        ),
+  rbind(c3.b %>%
+          summarise(vocab.sd = sd(wasi.vocab.rscore),
+                    similarities.sd = sd(wasi.similarities.rscore),
+                    matrix.sd = sd(wasi.matrix.rscore),
+                    full2.sd = sd(wasi.full2subtest),
+                    age.sd = sd(age),
+              sc.time.raw.sd = sd(sc.time.raw),
+              sc.time.scaled.sd = sd(sc.time.scaled),
+              uc.time.raw.sd = sd(uc.time.raw),
+              uc.time.scaled.sd = sd(uc.time.scaled),
+              cat.a.errors.sd = sd(cat.a.errors),
+              cat.b.errors.sd = sd(cat.b.errors),
+              sc.wf.sd = sd(sc.wf),
+              sc.cd.sd = sd(sc.cd),
+              uc.wf.sd = sd(uc.wf),
+              uc.cd.sd = sd(uc.cd)) %>%
+          gather(measure, mod.sev),
+        c3.b %>%
+          group_by(sex) %>%
+          summarise(mod.sev = n()) %>%
+          mutate(measure = sex, sex = NULL)
+        )
+  )
+
+demographics_contrast_table_m <- rbind(full_join(c1.m, full_join(c2.m, c3.m)), contrast_races)
+demographics_contrast_table_sd <- full_join(c1.sd, full_join(c2.sd, c3.sd))
+demographics_contrast_table <- rbind(demographics_contrast_table_m, demographics_contrast_table_sd)
+write_csv(demographics_contrast_table[order(demographics_contrast_table$measure),], path = "demo_contrast.csv")
+```
+
+```{r}
+# Missing words in analysis
+# Andrew Vaughn
+
+# The number of participants grouped by the number of responses not found in each lexicon
+
+# Number of responses not found in subtlex
+wf_na_data <- wf_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(subtlex.NA, section) %>%
+  summarise(n = n()) %>%
+  mutate(total_na = subtlex.NA * n)
+
+sum(wf_na_data$total_na)
+
+# Number of NA LSA values
+lsa_na_data <- lsa_data %>%
+  filter(DODID %in% unique(demo_neuropsych_long$DODID)) %>%
+  group_by(DODID, section) %>%
+  summarise(missing_words = sum(is.na(lsa))) %>%
+  group_by(missing_words, section) %>%
+  summarise(n = n()) %>%
+  mutate(total_na = missing_words * n)
+
+sum(lsa_na_data$total_na)
+  
+```
+
+## Modeling WF with MCA
+
+```{r}
+wf_mod_data <- wf_data_ss %>% 
+  mutate(secc = ifelse(section == "SC", 1, -1)) %>% # dependency
+  group_by(DODID, osuWIS) %>%
+  # introduces dependency of HSCT section
+  summarise(w0_wf = mean(m_wf),     # between-ss effect
+            w1_wf = sum(m_wf*secc), # within-ss effect of HSCT section 
+            w0_cd = mean(m_cd),     # between-ss effect
+            w1_cd = sum(m_cd*secc)  # within-ss effect of HSCT section) %>%
+            ) %>%
+  ungroup() %>%
+  left_join(., ccodes_merge, by = "osuWIS") %>% # between-subjects ccodes
+  left_join(., ages, by = "DODID") %>%
+  mutate(age_c = scale(age, center = TRUE, scale = FALSE), # mean centers age
+         iq_c = scale(wasi.full2IQ, center = TRUE, scale = FALSE),
+         # converts to factor
+         osuWIS = factor(osuWIS, 
+                         levels = c("Control", "2", "3", "4", "5"),
+                         labels = c("Control","Possible", "Mild", "Mod/Severe", "Mod/Severe") 
+                        )
+         )
+
+# imports these contrasts to factor
+contrasts(wf_mod_data$osuWIS) <- ccodes_mat
+
+# Word Frequency Amodels ----
+summary(lm(w0_wf ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+summary(lm(w1_wf ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+
+# Visualizing word frequency IQ model results
+
+# W0 - c3
+w0_wf_c3_sum <- wf_mod_data %>%
+  group_by(c3) %>%
+  summarise(m = mean(w0_wf), sd = sd(w0_wf), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+
+ggplot(w0_wf_c3_sum %>% filter(c3 != 0), aes(factor(c3), m)) +
+  geom_point(data = wf_mod_data %>% filter(c3 != 0),
+             aes(y = w0_wf), shape = 1, position = pj, alpha = 1/3
+             ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05) +
+  labs(x = "Group", y = "Average WF Rating (w0)") +
+  scale_x_discrete(labels = c("-1" = "Mod/Severe TBI", "1" = "Mild TBI")) +
+  theme_minimal()
+
+# W0 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w0_wf)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Average WF Rating (w0)") +
+  theme_minimal()
+
+# W1 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w1_wf)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ (centered)", y = "Within-ss WF Effect (w1)") +
+  theme_minimal()
+
+# W1 - c3*IQ
+ggplot(wf_mod_data %>% filter(c3 != 0), 
+       aes(wasi.full2IQ, w1_wf, group = factor(c3), color = factor(c3))
+       ) +
+  geom_point(shape = 1, alpha = 2/3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "IQ", y = "Within-ss WF Effect (w1)") +
+  scale_color_manual(values = c("black", "red"), 
+                     labels = c("Mod/Severe", "Mild")
+                     ) +
+  theme_minimal()
+
+# Contextual Diversity models ----
+summary(lm(w0_cd ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+summary(lm(w1_cd ~ 1 + osuWIS*age_c + osuWIS*iq_c, data = wf_mod_data))
+
+# Visualizing CD models
+
+# W0 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w0_cd)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Average CD Rating (w0)") +
+  theme_minimal()
+
+# W0 - c3
+w0_cd_c3_sum <- wf_mod_data %>%
+  group_by(c3) %>%
+  summarise(m = mean(w0_cd), sd = sd(w0_cd), n = n(), sem = sd/sqrt(n)) %>%
+  ungroup()
+
+ggplot(w0_cd_c3_sum %>% filter(c3 != 0), aes(factor(c3), m)) +
+  geom_point(data = wf_mod_data %>% filter(c3 != 0),
+             aes(y = w0_cd), shape = 1, position = pj, alpha = 2/3
+             ) +
+  geom_point() +
+  geom_errorbar(aes(ymin = m-sem, ymax = m+sem), width = .05) +
+  labs(x = "Group", y = "Average CD Rating (w0)") +
+  scale_x_discrete(labels = c("-1" = "Mod/Severe TBI", "1" = "Mild TBI")) +
+  theme_minimal()
+
+# W1 - IQ
+ggplot(wf_mod_data, aes(wasi.full2IQ, w1_cd)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = TRUE) +
+  labs(x = "IQ", y = "Within-ss CD effect (w1)") +
+  theme_minimal()
+
+# W1 - c2*IQ
+ggplot(wf_mod_data %>% filter(c2 != 0), 
+       aes(wasi.full2IQ, w1_cd, group = factor(c2), color = factor(c2))
+       ) +
+  geom_point() +
+  scale_color_manual(values = c("black", "blue"), 
+                     labels = c("Mild/Mod/Severe TBI", "Possible TBI")
+                     ) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "IQ", y = "Within-ss CD effect (w1)") +
+  theme_minimal()
+
+```
