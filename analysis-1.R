@@ -184,14 +184,6 @@ demo_neuropsych_clean <-
     osuWorstInjury = factor(osuWorstInjury) # converts to factor
   )
 
-# Notes about drops:
-# Started out with 152 TBI participants
-# write_csv(
-#   demo_neuropsych_clean %>% select(DODID, group), 
-#   path = "final-ss.csv"
-#   )
-# test <- demo_neuropsych %>% filter(audit > 10)
-
 # Specifies contrasts
 # This helps with the linear modeling
 contrasts(demo_neuropsych_clean$osuWorstInjury) <-
@@ -424,12 +416,12 @@ ggplot(lsa_data_sum_c1, aes(section, m, group = c1, color = c1)) +
   theme(legend.position = "none")
 
 # Exports SVG for further work in omnigraffle (uncomment if necessary) 
-# ggsave(
-#   "../output/paper-figure-lsa-sd-error-bars.svg", 
-#   width = 95, 
-#   height = 117, 
-#   units = "mm"
-#   )
+ggsave(
+  "../output/paper-figure-lsa-sd-error-bars.svg",
+  width = 95,
+  height = 117,
+  units = "mm"
+  )
 
 # SEM Error Bars
 ggplot(lsa_data_sum_c1, aes(section, m, group = c1, color = c1)) +
@@ -450,12 +442,12 @@ ggplot(lsa_data_sum_c1, aes(section, m, group = c1, color = c1)) +
   theme(legend.position = "none")
 
 # Exports SVG for further work in omnigraffle (uncomment if necessary) 
-# ggsave(
-#   "../output/paper-figure-lsa-sem-error-bars.svg", 
-#   width = 95, 
-#   height = 117, 
-#   units = "mm"
-#   )
+ggsave(
+  "../output/paper-figure-lsa-sem-error-bars.svg",
+  width = 95,
+  height = 117,
+  units = "mm"
+  )
 
 # Correlation
 ggplot(lsa_sum_iq, aes(wasi.full2IQ, lsa_diff)) +
@@ -514,12 +506,12 @@ ggplot(hsct_time_sum, aes(section, m, group = group, color = group)) +
   theme(legend.position = "none")
 
 # Exports SVG for further work in omnigraffle (uncomment if necessary) 
-# ggsave(
-#   "../output/paper-figure-hsct-time-sem-error-bars.svg", 
-#   width = 95, 
-#   height = 117, 
-#   units = "mm"
-#   )
+ggsave(
+  "../output/paper-figure-hsct-time-sem-error-bars.svg",
+  width = 95,
+  height = 117,
+  units = "mm"
+  )
 
 # SD error bars
 ggplot(hsct_time_sum, aes(section, m, group = group, color = group)) +
@@ -533,12 +525,12 @@ ggplot(hsct_time_sum, aes(section, m, group = group, color = group)) +
   theme(legend.position = "none")
 
 # Exports SVG for further work in omnigraffle (uncomment if necessary) 
-# ggsave(
-#   "../output/paper-figure-hsct-time-sd-error-bars.svg", 
-#   width = 95, 
-#   height = 117, 
-#   units = "mm"
-#   )
+ggsave(
+  "../output/paper-figure-hsct-time-sd-error-bars.svg",
+  width = 95,
+  height = 117,
+  units = "mm"
+  )
 
 
 # Word Frequency Analysis ----
